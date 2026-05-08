@@ -1681,23 +1681,3 @@ export default function App() {
     </>
   );
 }
-                      <tr key={r.Yield_ID}>
-                        <td>{r.farmer}</td>
-                        <td>{r.crop}</td>
-                        <td>{r.season}</td>
-                        <td>{r.rainfall ?? '—'}</td>
-                        <td>{r.yield}</td>
-                        <td><button className="del" onClick={() => del(r.Yield_ID)}>del</button></td>
-                      </tr>
-                    ))
-                  }
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-      </div>
-    </>
-  )
-}
