@@ -31,75 +31,97 @@ app.get("/api/seasons", async (_, res) => {
   res.json(r);
 });
 
-// ── Stats ────────────────────────────────────────────────────
+// ── Stats (calls stored procedure) ──────────────────────────
 app.get("/api/stats", async (_, res) => {
-  const [[{ total_farmers }]] = await q("SELECT COUNT(*) AS total_farmers FROM Farmer");
-  const [[{ avg_yield }]]     = await q("SELECT ROUND(AVG(Yield_Amount),2) AS avg_yield FROM Yield");
-  const [[{ total_records }]] = await q("SELECT COUNT(*) AS total_records FROM Yield");
-  const [[{ top_crop }]]      = await q(
-    `SELECT c.Crop_Name AS top_crop FROM Yield y
-     JOIN Crop c ON c.Crop_ID = y.Crop_ID
-     GROUP BY c.Crop_ID ORDER BY SUM(y.Yield_Amount) DESC LIMIT 1`
-  );
-  res.json({ total_farmers, avg_yield, total_records, top_crop });
+  try {
+    // Call the analytics procedure that returns aggregated stats
+    const [results] = await q("CALL Get_Analytics_Data()");
+    
+    // Extract first result set (summary stats)
+    const summary = results[0][0];
+    
+    res.json({
+      total_farmers: summary.Total_Farmers,
+      total_yield: summary.Total_Yield,
+      avg_rainfall: summary.Average_Rainfall,
+      top_farmer: summary.Top_Farmer,
+      top_crop: summary.Top_Crop
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-// ── All records (joined) ─────────────────────────────────────
+// ── All records (uses view instead of raw SQL) ──────────────
 app.get("/api/records", async (_, res) => {
-  const [r] = await q(
-    `SELECT y.Yield_ID, f.Name AS farmer, c.Crop_Name AS crop,
-            CONCAT(s.Season_Name,' ',s.Year) AS season,
-            r.Rainfall_Amount AS rainfall, y.Yield_Amount AS yield
-     FROM Yield y
-     JOIN Farmer f ON f.Farmer_ID = y.Farmer_ID
-     JOIN Crop   c ON c.Crop_ID   = y.Crop_ID
-     JOIN Season s ON s.Season_ID = y.Season_ID
-     LEFT JOIN Rainfall r ON r.Season_ID = y.Season_ID
-     ORDER BY y.Yield_ID DESC`
-  );
-  res.json(r);
+  try {
+    // Retrieve data from the vw_yield_detail view (no raw JOINs)
+    const [r] = await q(
+      `SELECT Farmer_ID, Farmer, Crop, Season, Rainfall, Yield, Area_Ha, Yield_Per_Ha
+       FROM vw_yield_detail
+       ORDER BY Recorded_Date DESC`
+    );
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-// ── Chart data ───────────────────────────────────────────────
+// ── Chart data (simpler, view-based) ────────────────────────
 app.get("/api/chart", async (_, res) => {
-  const [r] = await q(
-    `SELECT CONCAT(s.Season_Name,' ',s.Year) AS season,
-            ROUND(AVG(y.Yield_Amount),2) AS avg_yield,
-            r.Rainfall_Amount AS rainfall
-     FROM Yield y
-     JOIN Season s ON s.Season_ID = y.Season_ID
-     LEFT JOIN Rainfall r ON r.Season_ID = y.Season_ID
-     GROUP BY y.Season_ID, s.Season_Name, s.Year, r.Rainfall_Amount
-     ORDER BY s.Year, s.Season_Name`
-  );
-  res.json(r);
+  try {
+    // Use the season performance view for chart data
+    const [r] = await q(
+      `SELECT Season, Total_Yield, Rainfall FROM vw_season_performance ORDER BY Season`
+    );
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-// ── Add record ───────────────────────────────────────────────
+// ── Add record (calls stored procedure) ─────────────────────
 app.post("/api/records", async (req, res) => {
   const { farmer_id, crop_id, season_id, yield_amount, rainfall_amount } = req.body;
   const conn = await pool.getConnection();
+  
   try {
     await conn.beginTransaction();
+    
+    // Handle rainfall update/insert if provided
     if (rainfall_amount != null) {
       const [[ex]] = await conn.execute(
-        "SELECT Rainfall_ID FROM Rainfall WHERE Season_ID = ?", [season_id]
+        "SELECT Rainfall_ID FROM Rainfall WHERE Season_ID = ?", 
+        [season_id]
       );
+      
       if (ex) {
-        await conn.execute("UPDATE Rainfall SET Rainfall_Amount=? WHERE Season_ID=?", [rainfall_amount, season_id]);
+        await conn.execute(
+          "UPDATE Rainfall SET Rainfall_Amount = ? WHERE Season_ID = ?", 
+          [rainfall_amount, season_id]
+        );
       } else {
-        await conn.execute("INSERT INTO Rainfall (Season_ID,Rainfall_Amount) VALUES(?,?)", [season_id, rainfall_amount]);
+        await conn.execute(
+          "INSERT INTO Rainfall (Season_ID, Rainfall_Amount) VALUES (?, ?)", 
+          [season_id, rainfall_amount]
+        );
       }
     }
+    
+    // Call the stored procedure for yield insertion (validates and logs)
     await conn.execute(
-      "INSERT INTO Yield (Farmer_ID,Crop_ID,Season_ID,Yield_Amount) VALUES(?,?,?,?)",
+      "CALL Insert_Yield_Record(?, ?, ?, ?)",
       [farmer_id, crop_id, season_id, yield_amount]
     );
+    
     await conn.commit();
-    res.json({ success: true });
+    res.json({ success: true, message: "Yield record inserted successfully" });
   } catch (e) {
     await conn.rollback();
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ 
+      error: e.message || "Failed to insert yield record",
+      details: e.sqlMessage
+    });
   } finally {
     conn.release();
   }
@@ -107,8 +129,55 @@ app.post("/api/records", async (req, res) => {
 
 // ── Delete record ────────────────────────────────────────────
 app.delete("/api/records/:id", async (req, res) => {
-  await q("DELETE FROM Yield WHERE Yield_ID=?", [req.params.id]);
-  res.json({ success: true });
+  try {
+    const [result] = await q("DELETE FROM Yield WHERE Yield_ID = ?", [req.params.id]);
+    
+    if (result.affectedRows === 0) {
+      res.status(404).json({ error: "Yield record not found" });
+    } else {
+      res.json({ success: true, message: "Yield record deleted successfully" });
+    }
+  } catch (e) {
+    res.status(500).json({ 
+      error: e.message || "Failed to delete yield record",
+      details: e.sqlMessage
+    });
+  }
+});
+
+// ── Farmer Summary (view-based) ──────────────────────────────
+app.get("/api/farmers/summary", async (_, res) => {
+  try {
+    const [r] = await q(
+      `SELECT * FROM vw_farmer_summary ORDER BY Total_Yield DESC`
+    );
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Season Report (calls stored procedure with cursor) ───────
+app.get("/api/season/:id/report", async (req, res) => {
+  try {
+    const [results] = await q("CALL Generate_Season_Report(?)", [req.params.id]);
+    res.json(results[0]); // First result set from the procedure
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Full Analytics (multiple result sets) ────────────────────
+app.get("/api/analytics", async (_, res) => {
+  try {
+    const [results] = await q("CALL Get_Analytics_Data()");
+    res.json({
+      summary: results[0][0],
+      seasonal_comparison: results[1]
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 const PORT = process.env.PORT || 5000;
