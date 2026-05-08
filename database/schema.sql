@@ -3,9 +3,6 @@
 -- Tables + Constraints + Indexes + AuditLog
 -- ============================================================
 
-CREATE DATABASE IF NOT EXISTS agri_db;
-USE agri_db;
-
 -- ── TABLES ──────────────────────────────────────────────────
 
 -- Farmer master table

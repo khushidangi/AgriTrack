@@ -57,7 +57,7 @@ app.get("/api/records", async (_, res) => {
   try {
     // Retrieve data from the vw_yield_detail view (no raw JOINs)
     const [r] = await q(
-      `SELECT Farmer_ID, Farmer, Crop, Season, Rainfall, Yield, Area_Ha, Yield_Per_Ha
+      `SELECT Yield_ID, Farmer_ID, Farmer, Crop, Season, Rainfall, Yield, Area_Ha, Yield_Per_Ha
        FROM vw_yield_detail
        ORDER BY Recorded_Date DESC`
     );
@@ -86,8 +86,6 @@ app.post("/api/records", async (req, res) => {
   const conn = await pool.getConnection();
   
   try {
-    await conn.beginTransaction();
-    
     // Handle rainfall update/insert if provided
     if (rainfall_amount != null) {
       const [[ex]] = await conn.execute(
@@ -108,19 +106,16 @@ app.post("/api/records", async (req, res) => {
       }
     }
     
-    // Call the stored procedure for yield insertion (validates and logs)
+    // Call the stored procedure for yield insertion (handles its own transaction internally)
     await conn.execute(
       "CALL Insert_Yield_Record(?, ?, ?, ?)",
       [farmer_id, crop_id, season_id, yield_amount]
     );
     
-    await conn.commit();
     res.json({ success: true, message: "Yield record inserted successfully" });
   } catch (e) {
-    await conn.rollback();
     res.status(500).json({ 
-      error: e.message || "Failed to insert yield record",
-      details: e.sqlMessage
+      error: e.sqlMessage || e.message || "Failed to insert yield record"
     });
   } finally {
     conn.release();

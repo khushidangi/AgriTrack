@@ -4,8 +4,6 @@
 -- This is the brain of the database layer
 -- ============================================================
 
-USE agri_db;
-
 DELIMITER $$
 
 -- ═══════════════════════════════════════════════════════════
@@ -439,7 +437,7 @@ DELIMITER ;
 -- ── VIEWS ────────────────────────────────────────────────────
 
 CREATE VIEW vw_yield_detail AS
-    SELECT f.Farmer_ID, f.Name AS Farmer, c.Crop_Name AS Crop,
+    SELECT y.Yield_ID, f.Farmer_ID, f.Name AS Farmer, c.Crop_Name AS Crop,
            CONCAT(s.Season_Name,' ',s.Year) AS Season,
            COALESCE(r.Rainfall_Amount, 0) AS Rainfall,
            y.Yield_Amount AS Yield,

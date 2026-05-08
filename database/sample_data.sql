@@ -3,8 +3,6 @@
 -- Seed data, test data, and verification suite
 -- ============================================================
 
-USE agri_db;
-
 -- ═══════════════════════════════════════════════════════════
 -- SEED DATA: Farmers
 -- ═══════════════════════════════════════════════════════════
@@ -266,9 +264,3 @@ GROUP BY f.Farmer_ID, f.Name;
 
 -- Test Update_Yield_Record
 -- Uncomment to test: CALL Update_Yield_Record(1, 4250);
-
--- Test finding an average yield
-SELECT 'Function Test: AvgYield' AS Test;
-SELECT AvgYield(1) AS Wheat_Avg_Yield,
-       AvgYield(2) AS Rice_Avg_Yield,
-       AvgYield(3) AS Maize_Avg_Yield;
